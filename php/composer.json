@@ -1,0 +1,34 @@
+{
+  "name": "lessotp/sdk",
+  "description": "LessOTP Inbound WhatsApp Authentication client SDK for PHP.",
+  "type": "library",
+  "license": "MIT",
+  "homepage": "https://github.com/lessotp/sdk",
+  "support": {
+    "issues": "https://github.com/lessotp/sdk/issues",
+    "source": "https://github.com/lessotp/sdk/tree/main/php"
+  },
+  "keywords": ["lessotp", "whatsapp", "authentication", "verification", "passwordless"],
+  "require": {
+    "php": ">=7.4",
+    "ext-json": "*",
+    "guzzlehttp/guzzle": "^7.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "LessOTP\\Sdk\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "LessOTP\\Sdk\\Tests\\": "tests/"
+    }
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.6",
+    "guzzlehttp/psr7": "^2.0"
+  },
+  "scripts": {
+    "test": "phpunit"
+  }
+}
