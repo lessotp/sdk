@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 from urllib import error as urlerror
 
@@ -59,17 +59,20 @@ def server():
     _Handler.status = 200
     _Handler.response = _whatsapp_response()
     _Handler.requests = []
-    srv = HTTPServer(("127.0.0.1", 0), _Handler)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     try:
         yield srv
     finally:
-        srv.shutdown()
-        thread.join(timeout=2)
+        try:
+            srv.shutdown()
+        finally:
+            srv.server_close()
+            thread.join(timeout=5)
 
 
-def _url(server: HTTPServer) -> str:
+def _url(server) -> str:
     return "http://127.0.0.1:%d" % server.server_port
 
 
@@ -82,7 +85,7 @@ def _whatsapp_response(
             "request_id": request_id,
             "unique_code": unique_code,
             "channel": "whatsapp",
-            "wa_link": "https://wa.me/628999999999?text=%2FSTART%20%s" % unique_code,
+            "wa_link": "https://wa.me/628999999999?text=%2FSTART%20{}".format(unique_code),
             "expires_in": 180,
             "mode": mode,
         },
@@ -106,7 +109,7 @@ def _telegram_response(
     }
 
 
-def test_default_environment_is_production(server: HTTPServer) -> None:
+def test_default_environment_is_production(server) -> None:
     client = LessOTPClient("key_test", base_url=_url(server))
     assert client._environment == DEFAULT_ENVIRONMENT == "production"
 
@@ -114,7 +117,7 @@ def test_default_environment_is_production(server: HTTPServer) -> None:
     assert _Handler.requests[0]["path"] == "/api/v1/auth/request"
 
 
-def test_constructor_environment_routes_to_staging(server: HTTPServer) -> None:
+def test_constructor_environment_routes_to_staging(server) -> None:
     client = LessOTPClient("key_test", environment="staging", base_url=_url(server))
     _Handler.response = _whatsapp_response("req_stage", "S1T2G", "strict")
 
@@ -123,7 +126,7 @@ def test_constructor_environment_routes_to_staging(server: HTTPServer) -> None:
     assert _Handler.requests[0]["path"] == "/api/v1/staging/auth/request"
 
 
-def test_per_call_environment_override_beats_constructor(server: HTTPServer) -> None:
+def test_per_call_environment_override_beats_constructor(server) -> None:
     client = LessOTPClient("key_test", base_url=_url(server))
     _Handler.response = _whatsapp_response("req_stage", "S1T2G", "strict")
 
@@ -131,7 +134,7 @@ def test_per_call_environment_override_beats_constructor(server: HTTPServer) -> 
     assert _Handler.requests[0]["path"] == "/api/v1/staging/auth/request"
 
 
-def test_auth_request_strict_posts_to_production_endpoint(server: HTTPServer) -> None:
+def test_auth_request_strict_posts_to_production_endpoint(server) -> None:
     client = LessOTPClient("key_test", base_url=_url(server))
     result = client.auth_request("6281234567890")
 
@@ -147,7 +150,7 @@ def test_auth_request_strict_posts_to_production_endpoint(server: HTTPServer) ->
     }
 
 
-def test_auth_request_frictionless_sends_whatsapp_channel(server: HTTPServer) -> None:
+def test_auth_request_frictionless_sends_whatsapp_channel(server) -> None:
     _Handler.response = _whatsapp_response("req_fric", "B1C34", "frictionless")
     client = LessOTPClient("key_test", base_url=_url(server))
     result = client.auth_request()
@@ -155,7 +158,7 @@ def test_auth_request_frictionless_sends_whatsapp_channel(server: HTTPServer) ->
     assert json.loads(_Handler.requests[0]["body"]) == {"channel": "whatsapp"}
 
 
-def test_telegram_strict_request(server: HTTPServer) -> None:
+def test_telegram_strict_request(server) -> None:
     _Handler.response = _telegram_response()
     client = LessOTPClient("key_test", base_url=_url(server))
     result = client.request_telegram_auth("6281234567890")
@@ -168,7 +171,7 @@ def test_telegram_strict_request(server: HTTPServer) -> None:
     }
 
 
-def test_telegram_frictionless_request(server: HTTPServer) -> None:
+def test_telegram_frictionless_request(server) -> None:
     _Handler.response = _telegram_response("req_tg_fric", "TGR12", "frictionless")
     client = LessOTPClient("key_test", base_url=_url(server))
     result = client.request_auth(channel="telegram")
@@ -177,13 +180,13 @@ def test_telegram_frictionless_request(server: HTTPServer) -> None:
     assert json.loads(_Handler.requests[0]["body"]) == {"channel": "telegram"}
 
 
-def test_unknown_channel_raises(server: HTTPServer) -> None:
+def test_unknown_channel_raises(server) -> None:
     client = LessOTPClient("key_test", base_url=_url(server))
     with pytest.raises(LessOTPError, match="channel must be"):
         client.request_auth(channel="signal")
 
 
-def test_non_2xx_raises_lessotp_error(server: HTTPServer) -> None:
+def test_non_2xx_raises_lessotp_error(server) -> None:
     _Handler.status = 401
     _Handler.response = {"error": "invalid_api_key"}
     client = LessOTPClient("bad", base_url=_url(server))
@@ -191,7 +194,7 @@ def test_non_2xx_raises_lessotp_error(server: HTTPServer) -> None:
         client.auth_request()
 
 
-def test_unknown_environment_raises(server: HTTPServer) -> None:
+def test_unknown_environment_raises(server) -> None:
     with pytest.raises(LessOTPError, match="environment must be"):
         LessOTPClient("k", environment="qa", base_url=_url(server))
 
