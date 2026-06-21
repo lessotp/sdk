@@ -366,8 +366,8 @@ function isObject(x: unknown): x is Record<string, unknown> {
 
 function hexToBytes(hex: string): Uint8Array {
   const buf = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < buf.length; i += 2) {
-    buf[i / 2] = parseInt(hex.substr(i, 2), 16);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = parseInt(hex.substr(i * 2, 2), 16);
   }
   return buf;
 }
