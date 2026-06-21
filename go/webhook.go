@@ -44,5 +44,13 @@ func ParseVerificationSuccess(rawBody []byte) (VerificationSuccess, error) {
 	if v.RequestID == "" || v.PhoneNumber == "" {
 		return VerificationSuccess{}, errors.New("lessotp: webhook missing request_id or phone_number")
 	}
+	if v.Channel == "" {
+		v.Channel = ChannelWhatsApp
+	}
+	channel, err := resolveChannel(v.Channel)
+	if err != nil {
+		return VerificationSuccess{}, err
+	}
+	v.Channel = channel
 	return v, nil
 }

@@ -1,4 +1,7 @@
-"""LessOTP Inbound WhatsApp Authentication API — client SDK."""
+"""LessOTP Inbound Phone Authentication API — client SDK.
+
+Supports WhatsApp (default) and Telegram channels.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ DEFAULT_BASE_URL = "https://api.lessotp.com"
 DEFAULT_TIMEOUT_SECONDS = 10
 DEFAULT_ENVIRONMENT = "production"
 VALID_ENVIRONMENTS = ("production", "staging")
+VALID_CHANNELS = ("whatsapp", "telegram")
 RawBody = Union[str, bytes]
 
 
@@ -27,16 +31,19 @@ class AuthRequestResult:
 
     request_id: str
     unique_code: str
-    wa_link: str
+    channel: str
     expires_in: int
     mode: str
+    wa_link: Optional[str] = None
+    telegram_link: Optional[str] = None
+    telegram_text: Optional[str] = None
 
     @classmethod
     def from_response(cls, payload: Dict[str, Any]) -> "AuthRequestResult":
         data = payload.get("data")
         if not isinstance(data, dict):
             raise LessOTPError("LessOTP response missing 'data' object")
-        required = ["request_id", "unique_code", "wa_link", "expires_in", "mode"]
+        required = ["request_id", "unique_code", "channel", "expires_in", "mode"]
         for key in required:
             if key not in data:
                 raise LessOTPError("LessOTP response missing '%s'" % key)
@@ -45,12 +52,29 @@ class AuthRequestResult:
             raise LessOTPError(
                 "LessOTP response mode must be 'strict' or 'frictionless', got '%s'" % mode
             )
+        channel = str(data["channel"])
+        if channel not in VALID_CHANNELS:
+            raise LessOTPError("LessOTP response channel must be 'whatsapp' or 'telegram'")
+        if channel == "whatsapp" and not isinstance(data.get("wa_link"), str):
+            raise LessOTPError("LessOTP WhatsApp response missing 'wa_link'")
+        if channel == "telegram" and (
+            not isinstance(data.get("telegram_link"), str)
+            or not isinstance(data.get("telegram_text"), str)
+        ):
+            raise LessOTPError("LessOTP Telegram response missing 'telegram_link' or 'telegram_text'")
         return cls(
             request_id=str(data["request_id"]),
             unique_code=str(data["unique_code"]),
-            wa_link=str(data["wa_link"]),
+            channel=channel,
             expires_in=int(data["expires_in"]),
             mode=mode,
+            wa_link=str(data["wa_link"]) if isinstance(data.get("wa_link"), str) else None,
+            telegram_link=str(data["telegram_link"])
+            if isinstance(data.get("telegram_link"), str)
+            else None,
+            telegram_text=str(data["telegram_text"])
+            if isinstance(data.get("telegram_text"), str)
+            else None,
         )
 
 
@@ -61,7 +85,10 @@ class VerificationSuccess:
     event: str
     request_id: str
     phone_number: str
+    channel: str = "whatsapp"
     timestamp: Optional[str] = None
+    telegram_user_id: Optional[str] = None
+    telegram_username: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "VerificationSuccess":
@@ -72,12 +99,20 @@ class VerificationSuccess:
         phone_number = payload.get("phone_number")
         if not isinstance(request_id, str) or not isinstance(phone_number, str):
             raise LessOTPError("webhook payload missing request_id or phone_number")
+        channel = str(payload.get("channel", "whatsapp"))
+        if channel not in VALID_CHANNELS:
+            raise LessOTPError("webhook payload channel must be 'whatsapp' or 'telegram'")
         timestamp = payload.get("timestamp")
+        tg_user = payload.get("telegram_user_id")
+        tg_username = payload.get("telegram_username")
         return cls(
             event=event,
             request_id=request_id,
             phone_number=phone_number,
+            channel=channel,
             timestamp=timestamp if isinstance(timestamp, str) else None,
+            telegram_user_id=tg_user if isinstance(tg_user, str) else None,
+            telegram_username=tg_username if isinstance(tg_username, str) else None,
         )
 
 
@@ -103,17 +138,48 @@ class LessOTPClient:
         phone_number: Optional[str] = None,
         environment: Optional[str] = None,
     ) -> AuthRequestResult:
-        """Create a verification request.
+        """Create a WhatsApp verification request (legacy-compatible)."""
 
-        Endpoint is selected from the client environment. Pass ``environment``
-        to override for this call.
+        return self.request_auth(
+            channel="whatsapp",
+            phone_number=phone_number,
+            environment=environment,
+        )
+
+    def request_telegram_auth(
+        self,
+        phone_number: Optional[str] = None,
+        environment: Optional[str] = None,
+    ) -> AuthRequestResult:
+        """Create a Telegram verification request.
+
+        Strict when ``phone_number`` is supplied. Frictionless when omitted;
+        the user will share their phone through Telegram's official contact
+        sharing button.
         """
 
-        env = _resolve_environment(environment if environment is not None else self._environment)
-        return self._auth_request(_endpoint_for(env), phone_number)
+        return self.request_auth(
+            channel="telegram",
+            phone_number=phone_number,
+            environment=environment,
+        )
 
-    def _auth_request(self, path: str, phone_number: Optional[str]) -> AuthRequestResult:
-        body = {} if phone_number is None else {"phone_number": phone_number}
+    def request_auth(
+        self,
+        channel: str = "whatsapp",
+        phone_number: Optional[str] = None,
+        environment: Optional[str] = None,
+    ) -> AuthRequestResult:
+        """Create a multi-channel verification request."""
+
+        ch = _resolve_channel(channel)
+        env = _resolve_environment(environment if environment is not None else self._environment)
+        return self._auth_request(_endpoint_for(env), ch, phone_number)
+
+    def _auth_request(self, path: str, channel: str, phone_number: Optional[str]) -> AuthRequestResult:
+        body: Dict[str, Any] = {"channel": channel}
+        if phone_number is not None:
+            body["phone_number"] = phone_number
         raw_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
         req = urlrequest.Request(
             self._base_url + path,
@@ -123,7 +189,7 @@ class LessOTPClient:
                 "Authorization": "Bearer %s" % self._api_key,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "lessotp-sdk-python/0.1.0",
+                "User-Agent": "lessotp-sdk-python/0.2.0",
             },
         )
         try:
@@ -157,6 +223,16 @@ def _resolve_environment(value: Optional[str]) -> str:
     if value not in VALID_ENVIRONMENTS:
         raise LessOTPError(
             "LessOTP environment must be 'production' or 'staging', got '%s'" % value
+        )
+    return value
+
+
+def _resolve_channel(value: Optional[str]) -> str:
+    if value is None or value == "":
+        return "whatsapp"
+    if value not in VALID_CHANNELS:
+        raise LessOTPError(
+            "LessOTP channel must be 'whatsapp' or 'telegram', got '%s'" % value
         )
     return value
 

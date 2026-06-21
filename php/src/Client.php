@@ -15,6 +15,10 @@ use Psr\Http\Message\ResponseInterface;
  * Talks to {@code POST /api/v1/auth/request} (production) and
  * {@code POST /api/v1/staging/auth/request} (staging), returning a
  * strongly-typed {@see AuthRequestResult}. Stateless.
+ *
+ * Supported channels:
+ * - WhatsApp — default; presence of `phone_number` toggles strict mode.
+ * - Telegram — user shares their phone via the official Telegram contact button.
  */
 final class Client
 {
@@ -45,68 +49,97 @@ final class Client
 
     /**
      * @param string             $apiKey
-     * @param string             $baseUrl
-     * @param HttpClient|null    $http
-     * @param int                $timeoutSeconds
      * @param string             $environment production or staging
+     * @param string             $baseUrl
+     * @param int                $timeoutSeconds
+     * @param HttpClient|null    $http
      */
     public function __construct(
         $apiKey,
+        $environment = 'production',
         $baseUrl = 'https://api.lessotp.com',
-        $http = null,
         $timeoutSeconds = 10,
-        $environment = 'production'
+        $http = null
     ) {
         $this->apiKey = $apiKey;
-        $this->baseUrl = $baseUrl;
-        $this->http = $http;
-        $this->timeoutSeconds = $timeoutSeconds;
         $this->environment = self::resolveEnvironment($environment);
+        $this->baseUrl = $baseUrl;
+        $this->timeoutSeconds = $timeoutSeconds;
+        $this->http = $http;
     }
 
     /**
-     * Create a verification request.
+     * Create a WhatsApp verification request (backward-compatible).
      *
-     * Endpoint is selected from the client environment. Pass `$environment` to
-     * override for this call.
+     * Endpoint is selected from the client environment. Pass `$environment`
+     * to override for one call.
      *
      * @param  string|null $phoneNumber  E.164-like number without `+` (e.g. `6281234567890`).
-     *                                  When omitted, the API returns a frictionless mode.
      * @param  string|null $environment production or staging
-     * @return AuthRequestResult
-     * @throws LessOTPException on transport, auth, or validation failure.
-     */
-    public function authRequest($phoneNumber = null, $environment = null)
-    {
-        return $this->performAuthRequest($this->endpointFor($environment), $phoneNumber);
-    }
-
-    /** Alias of {@see authRequest()}. */
-    public function requestAuth($phoneNumber = null, $environment = null)
-    {
-        return $this->authRequest($phoneNumber, $environment);
-    }
-
-    /**
-     * @param  string     $path
-     * @param  string|null $phoneNumber
      * @return AuthRequestResult
      * @throws LessOTPException
      */
-    private function performAuthRequest($path, $phoneNumber)
+    public function authRequest($phoneNumber = null, $environment = null)
     {
+        return $this->requestAuth(VerificationChannel::whatsapp(), $phoneNumber, $environment);
+    }
+
+    /**
+     * Create a Telegram verification request.
+     *
+     * Strict if `$phoneNumber` is supplied: the user's shared contact must
+     * match this number. Frictionless if `$phoneNumber` is `null`: the
+     * resolved phone from the user's contact share will be returned on the
+     * outbound webhook.
+     *
+     * @param  string|null $phoneNumber
+     * @param  string|null $environment production or staging
+     * @return AuthRequestResult
+     * @throws LessOTPException
+     */
+    public function requestTelegramAuth($phoneNumber = null, $environment = null)
+    {
+        return $this->requestAuth(VerificationChannel::telegram(), $phoneNumber, $environment);
+    }
+
+    /**
+     * Multi-channel request method.
+     *
+     * @param  VerificationChannel $channel
+     * @param  string|null         $phoneNumber
+     * @param  string|null         $environment production or staging
+     * @return AuthRequestResult
+     * @throws LessOTPException
+     */
+    public function requestAuth(VerificationChannel $channel, $phoneNumber = null, $environment = null)
+    {
+        $path = $this->endpointFor($environment);
+        return $this->performAuthRequest($path, $channel, $phoneNumber);
+    }
+
+    /**
+     * @param  string             $path
+     * @param  VerificationChannel $channel
+     * @param  string|null        $phoneNumber
+     * @return AuthRequestResult
+     * @throws LessOTPException
+     */
+    private function performAuthRequest($path, VerificationChannel $channel, $phoneNumber)
+    {
+        $body = array('channel' => $channel->value());
+        if ($phoneNumber !== null && $phoneNumber !== '') {
+            $body['phone_number'] = $phoneNumber;
+        }
         try {
-            $response = $this->httpClient()->post($this->endpoint($path), [
-                'headers' => [
+            $response = $this->httpClient()->post($this->endpoint($path), array(
+                'headers' => array(
                     'Authorization' => 'Bearer ' . $this->apiKey,
                     'Content-Type' => 'application/json',
                     'Accept' => 'application/json',
-                ],
-                'json' => $phoneNumber === null
-                    ? new \stdClass()
-                    : array('phone_number' => $phoneNumber),
+                ),
+                'json' => $body,
                 'timeout' => $this->timeoutSeconds,
-            ]);
+            ));
         } catch (RequestException $e) {
             throw new LessOTPException(
                 'LessOTP authRequest failed: '
@@ -166,7 +199,7 @@ final class Client
         return new HttpClient(array(
             'base_uri' => rtrim($this->baseUrl, '/'),
             'headers' => array(
-                'User-Agent' => 'lessotp-sdk-php/0.1.0',
+                'User-Agent' => 'lessotp-sdk-php/0.2.0',
             ),
         ));
     }

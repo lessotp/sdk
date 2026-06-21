@@ -9,74 +9,94 @@ namespace LessOTP\Sdk;
  */
 final class VerificationSuccess
 {
-    /**
-     * @var string
-     */
+    /** @var string */
     private $event;
 
-    /**
-     * @var string
-     */
+    /** @var VerificationChannel */
+    private $channel;
+
+    /** @var string */
     private $requestId;
 
-    /**
-     * @var string
-     */
+    /** @var string */
     private $phoneNumber;
 
-    /**
-     * @var string|null
-     */
+    /** @var string|null */
+    private $telegramUserId;
+
+    /** @var string|null */
+    private $telegramUsername;
+
+    /** @var string|null */
     private $timestamp;
 
     /**
-     * @param string      $event
-     * @param string      $requestId
-     * @param string      $phoneNumber
-     * @param string|null $timestamp
+     * @param string              $event
+     * @param VerificationChannel $channel
+     * @param string              $requestId
+     * @param string              $phoneNumber
+     * @param string|null         $timestamp
+     * @param string|null         $telegramUserId
+     * @param string|null         $telegramUsername
      */
     public function __construct(
         $event,
+        VerificationChannel $channel,
         $requestId,
         $phoneNumber,
-        $timestamp = null
+        $timestamp = null,
+        $telegramUserId = null,
+        $telegramUsername = null
     ) {
         $this->event = $event;
+        $this->channel = $channel;
         $this->requestId = $requestId;
         $this->phoneNumber = $phoneNumber;
         $this->timestamp = $timestamp;
+        $this->telegramUserId = $telegramUserId;
+        $this->telegramUsername = $telegramUsername;
     }
 
-    /**
-     * @return string
-     */
+    /** @return string */
     public function getEvent()
     {
         return $this->event;
     }
 
-    /**
-     * @return string
-     */
+    /** @return VerificationChannel */
+    public function getChannel()
+    {
+        return $this->channel;
+    }
+
+    /** @return string */
     public function getRequestId()
     {
         return $this->requestId;
     }
 
-    /**
-     * @return string
-     */
+    /** @return string */
     public function getPhoneNumber()
     {
         return $this->phoneNumber;
     }
 
-    /**
-     * @return string|null
-     */
+    /** @return string|null */
     public function getTimestamp()
     {
         return $this->timestamp;
+    }
+
+    /** @return string|null */
+    public function getTelegramUserId()
+    {
+        return $this->telegramUserId;
+    }
+
+    /** @return string|null */
+    public function getTelegramUsername()
+    {
+        return $this->telegramUsername;
     }
 
     /**
@@ -95,11 +115,15 @@ final class VerificationSuccess
                 throw new LessOTPException("Webhook payload missing '$required'.");
             }
         }
+        $channel = VerificationChannel::from(isset($body['channel']) ? (string) $body['channel'] : VerificationChannel::WHATSAPP);
         return new self(
             $event,
+            $channel,
             (string) $body['request_id'],
             (string) $body['phone_number'],
-            isset($body['timestamp']) ? (string) $body['timestamp'] : null
+            isset($body['timestamp']) ? (string) $body['timestamp'] : null,
+            isset($body['telegram_user_id']) ? (string) $body['telegram_user_id'] : null,
+            isset($body['telegram_username']) ? (string) $body['telegram_username'] : null
         );
     }
 }

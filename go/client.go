@@ -21,6 +21,15 @@ const (
 	EnvironmentStaging    Environment = "staging"
 )
 
+// VerificationChannel selects the inbound phone authentication channel.
+// WhatsApp is the default for backward compatibility.
+type VerificationChannel string
+
+const (
+	ChannelWhatsApp VerificationChannel = "whatsapp"
+	ChannelTelegram VerificationChannel = "telegram"
+)
+
 // VerificationMode is the `mode` value returned by LessOTP's auth request API.
 type VerificationMode string
 
@@ -29,28 +38,42 @@ const (
 	ModeFrictionless VerificationMode = "frictionless"
 )
 
+// AuthRequestParams configure a multi-channel auth request.
+type AuthRequestParams struct {
+	// Channel defaults to ChannelWhatsApp when empty.
+	Channel VerificationChannel
+	// PhoneNumber enables strict mode. Nil means frictionless mode.
+	PhoneNumber *string
+}
+
 // AuthRequestResult is the normalized response of POST /api/v1/auth/request.
 type AuthRequestResult struct {
-	RequestID  string          `json:"request_id"`
-	UniqueCode string          `json:"unique_code"`
-	WaLink     string          `json:"wa_link"`
-	ExpiresIn  int             `json:"expires_in"`
-	Mode       VerificationMode `json:"mode"`
+	RequestID    string              `json:"request_id"`
+	UniqueCode   string              `json:"unique_code"`
+	Channel      VerificationChannel `json:"channel"`
+	WaLink       string              `json:"wa_link,omitempty"`
+	TelegramLink string              `json:"telegram_link,omitempty"`
+	TelegramText string              `json:"telegram_text,omitempty"`
+	ExpiresIn    int                 `json:"expires_in"`
+	Mode         VerificationMode    `json:"mode"`
 }
 
 // VerificationSuccess represents a `verification.success` webhook payload.
 type VerificationSuccess struct {
-	Event       string `json:"event"`
-	RequestID   string `json:"request_id"`
-	PhoneNumber string `json:"phone_number"`
-	Timestamp   string `json:"timestamp,omitempty"`
+	Event            string              `json:"event"`
+	Channel          VerificationChannel `json:"channel,omitempty"`
+	RequestID        string              `json:"request_id"`
+	PhoneNumber      string              `json:"phone_number"`
+	TelegramUserID   string              `json:"telegram_user_id,omitempty"`
+	TelegramUsername string              `json:"telegram_username,omitempty"`
+	Timestamp        string              `json:"timestamp,omitempty"`
 }
 
 // Options configure a Client. All fields are optional except APIKey.
 type Options struct {
 	APIKey      string
 	Environment Environment // default: production
-	BaseURL     string        // default: https://api.lessotp.com
+	BaseURL     string      // default: https://api.lessotp.com
 	Timeout     time.Duration // default: 10s
 	HTTPClient  *http.Client
 }
@@ -95,13 +118,36 @@ func NewClient(opts Options) (*Client, error) {
 	}, nil
 }
 
-// AuthRequest creates a verification request.
+// AuthRequest creates a WhatsApp verification request.
 //
 // If phoneNumber is nil, the request is frictionless. Otherwise the
-// phoneNumber is sent as the strict-mode `phone_number`. The endpoint is
-// selected from AuthRequestOptions.Environment when provided, otherwise the
-// Client's environment.
+// phoneNumber is sent as strict-mode `phone_number`. The endpoint is selected
+// from AuthRequestOptions.Environment when provided, otherwise the Client's
+// environment. This method is kept for backward compatibility; use RequestAuth
+// or RequestTelegramAuth for explicit multi-channel calls.
 func (c *Client) AuthRequest(ctx context.Context, phoneNumber *string, opts ...AuthRequestOptions) (AuthRequestResult, error) {
+	return c.RequestWhatsAppAuth(ctx, phoneNumber, opts...)
+}
+
+// RequestWhatsAppAuth creates a WhatsApp verification request.
+func (c *Client) RequestWhatsAppAuth(ctx context.Context, phoneNumber *string, opts ...AuthRequestOptions) (AuthRequestResult, error) {
+	return c.RequestAuth(ctx, AuthRequestParams{Channel: ChannelWhatsApp, PhoneNumber: phoneNumber}, opts...)
+}
+
+// RequestTelegramAuth creates a Telegram verification request.
+//
+// Strict mode: pass phoneNumber. Frictionless mode: pass nil. Telegram users
+// always verify by tapping the official Share phone number button; LessOTP does
+// not accept manually typed phone numbers as Telegram identity.
+func (c *Client) RequestTelegramAuth(ctx context.Context, phoneNumber *string, opts ...AuthRequestOptions) (AuthRequestResult, error) {
+	return c.RequestAuth(ctx, AuthRequestParams{Channel: ChannelTelegram, PhoneNumber: phoneNumber}, opts...)
+}
+
+// RequestAuth creates a multi-channel verification request.
+//
+// Channel defaults to WhatsApp for backward compatibility. Endpoint selection
+// follows the client environment unless overridden per call.
+func (c *Client) RequestAuth(ctx context.Context, params AuthRequestParams, opts ...AuthRequestOptions) (AuthRequestResult, error) {
 	env := c.environment
 	if len(opts) > 0 {
 		resolved, err := resolveEnvironment(opts[0].Environment)
@@ -110,13 +156,17 @@ func (c *Client) AuthRequest(ctx context.Context, phoneNumber *string, opts ...A
 		}
 		env = resolved
 	}
-	return c.doAuthRequest(ctx, endpointFor(env), phoneNumber)
+	return c.doAuthRequest(ctx, endpointFor(env), params)
 }
 
-func (c *Client) doAuthRequest(ctx context.Context, path string, phoneNumber *string) (AuthRequestResult, error) {
-	body := map[string]any{}
-	if phoneNumber != nil {
-		body["phone_number"] = *phoneNumber
+func (c *Client) doAuthRequest(ctx context.Context, path string, params AuthRequestParams) (AuthRequestResult, error) {
+	channel, err := resolveChannel(params.Channel)
+	if err != nil {
+		return AuthRequestResult{}, err
+	}
+	body := map[string]any{"channel": string(channel)}
+	if params.PhoneNumber != nil {
+		body["phone_number"] = *params.PhoneNumber
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -131,7 +181,7 @@ func (c *Client) doAuthRequest(ctx context.Context, path string, phoneNumber *st
 	req.Header.Set("authorization", "Bearer "+c.apiKey)
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("user-agent", "lessotp-sdk-go/0.1.0")
+	req.Header.Set("user-agent", "lessotp-sdk-go/0.2.0")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -145,7 +195,7 @@ func (c *Client) doAuthRequest(ctx context.Context, path string, phoneNumber *st
 	}
 
 	var envelope struct {
-		Status string             `json:"status"`
+		Status string            `json:"status"`
 		Data   AuthRequestResult `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -154,7 +204,42 @@ func (c *Client) doAuthRequest(ctx context.Context, path string, phoneNumber *st
 	if envelope.Status != "success" {
 		return AuthRequestResult{}, fmt.Errorf("lessotp: response status %q (raw: %s)", envelope.Status, string(raw))
 	}
+	if err := validateAuthRequestResult(&envelope.Data); err != nil {
+		return AuthRequestResult{}, err
+	}
 	return envelope.Data, nil
+}
+
+func validateAuthRequestResult(result *AuthRequestResult) error {
+	if result.Channel == "" {
+		result.Channel = ChannelWhatsApp
+	}
+	channel, err := resolveChannel(result.Channel)
+	if err != nil {
+		return err
+	}
+	result.Channel = channel
+	if result.RequestID == "" || result.UniqueCode == "" {
+		return errors.New("lessotp: response missing request_id or unique_code")
+	}
+	if result.ExpiresIn <= 0 {
+		return errors.New("lessotp: response missing expires_in")
+	}
+	switch result.Mode {
+	case ModeStrict, ModeFrictionless:
+	default:
+		return fmt.Errorf("lessotp: mode must be 'strict' or 'frictionless', got %q", string(result.Mode))
+	}
+	if result.Channel == ChannelTelegram {
+		if result.TelegramLink == "" || result.TelegramText == "" {
+			return errors.New("lessotp: Telegram response missing telegram_link or telegram_text")
+		}
+		return nil
+	}
+	if result.WaLink == "" {
+		return errors.New("lessotp: WhatsApp response missing wa_link")
+	}
+	return nil
 }
 
 func resolveEnvironment(value Environment) (Environment, error) {
@@ -166,6 +251,17 @@ func resolveEnvironment(value Environment) (Environment, error) {
 		return value, nil
 	}
 	return "", fmt.Errorf("lessotp: environment must be 'production' or 'staging', got %q", string(value))
+}
+
+func resolveChannel(value VerificationChannel) (VerificationChannel, error) {
+	if value == "" {
+		return ChannelWhatsApp, nil
+	}
+	switch value {
+	case ChannelWhatsApp, ChannelTelegram:
+		return value, nil
+	}
+	return "", fmt.Errorf("lessotp: channel must be 'whatsapp' or 'telegram', got %q", string(value))
 }
 
 func endpointFor(env Environment) string {

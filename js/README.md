@@ -1,10 +1,11 @@
 # LessOTP JavaScript / Bun / Node SDK
 
-Client for the **LessOTP Inbound WhatsApp Authentication API**.
+Client for the **LessOTP Inbound Phone Authentication API**.
 
-- Bun (native ESM)
-- Node.js 18+
-- Modern browsers (`crypto.subtle`)
+Supported channels:
+
+- WhatsApp — inbound `/START {code}` phone verification.
+- Telegram — bot `/start {code}` plus official **Share phone number** contact verification.
 
 ## Install
 
@@ -28,14 +29,31 @@ const staging = new LessOTPClient({
   environment: "staging",
 });
 
-// strict
-const strict = await client.authRequest("6281234567890");
+// WhatsApp strict (legacy-compatible)
+const whatsappStrict = await client.authRequest("6281234567890");
+console.log(whatsappStrict.channel, whatsappStrict.waLink);
 
-// frictionless
-const frictionless = await client.authRequest();
+// WhatsApp frictionless (legacy-compatible)
+const whatsappFrictionless = await client.authRequest();
 
-// per-call override
-const oneOff = await client.authRequest("6281234567890", { environment: "staging" });
+// Telegram strict
+const telegramStrict = await client.requestAuth({
+  channel: "telegram",
+  phoneNumber: "6281234567890",
+});
+if (telegramStrict.channel === "telegram") {
+  console.log(telegramStrict.telegramLink, telegramStrict.telegramText);
+}
+
+// Telegram frictionless: user shares phone number via Telegram contact button
+const telegramFrictionless = await client.requestAuth({ channel: "telegram" });
+
+// per-call environment override
+const oneOff = await client.requestAuth({
+  channel: "telegram",
+  phoneNumber: "6281234567890",
+  environment: "staging",
+});
 
 // webhook receiver
 const event = await parseVerifiedWebhook(
@@ -44,39 +62,74 @@ const event = await parseVerifiedWebhook(
   process.env.LESSOTP_WEBHOOK_SECRET!,
 );
 if (!event) return res.status(403).end();
-console.log(event.requestId, event.phoneNumber);
+
+console.log(event.channel, event.requestId, event.phoneNumber);
+if (event.channel === "telegram") {
+  console.log(event.telegramUserId, event.telegramUsername);
+}
 
 void staging;
-void strict;
-void frictionless;
+void whatsappFrictionless;
+void telegramFrictionless;
 void oneOff;
 ```
 
 ## API
 
-### `new LessOTPClient({ apiKey, environment?, baseUrl?, fetch?, timeoutMs? })`
+### `new LessOTPClient({ apiKey, environment?, baseUrl?, timeoutMs?, fetch? })`
+
+Options follow the same order as the Go SDK: apiKey → environment → baseUrl → timeout → custom transport.
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `apiKey` | required | App API key. |
 | `environment` | `"production"` | `"production"` or `"staging"`. |
 | `baseUrl` | `https://api.lessotp.com` | API host. |
-| `fetch` | global `fetch` | Custom fetcher for testing. |
 | `timeoutMs` | `10000` | HTTP timeout. |
+| `fetch` | global `fetch` | Custom fetcher for testing. |
 
 ### `client.authRequest(phoneNumber?, options?): Promise<AuthRequestResult>`
 
-Calls the auth request endpoint selected by `environment`. `options.environment` overrides the client environment for one call.
+Legacy-compatible convenience method. Defaults to WhatsApp.
 
 ```ts
-interface AuthRequestResult {
-  requestId: string;
-  uniqueCode: string;
-  waLink: string;
-  expiresIn: number;
-  mode: "strict" | "frictionless";
-}
+await client.authRequest("6281234567890"); // WhatsApp strict
+await client.authRequest(); // WhatsApp frictionless
+await client.authRequest("6281234567890", { environment: "staging" });
 ```
+
+### `client.requestAuth(options): Promise<AuthRequestResult>`
+
+Multi-channel request method.
+
+```ts
+await client.requestAuth({ channel: "whatsapp", phoneNumber: "6281234567890" });
+await client.requestAuth({ channel: "telegram", phoneNumber: "6281234567890" });
+await client.requestAuth({ channel: "telegram" }); // Telegram frictionless
+```
+
+```ts
+type AuthRequestResult =
+  | {
+      channel: "whatsapp";
+      requestId: string;
+      uniqueCode: string;
+      waLink: string;
+      expiresIn: number;
+      mode: "strict" | "frictionless";
+    }
+  | {
+      channel: "telegram";
+      requestId: string;
+      uniqueCode: string;
+      telegramLink: string;
+      telegramText: string;
+      expiresIn: number;
+      mode: "strict" | "frictionless";
+    };
+```
+
+Telegram note: LessOTP only accepts phone numbers shared through Telegram's official contact-sharing button. The platform verifies the shared contact belongs to the Telegram sender.
 
 ### `verifyWebhookSignature(rawBody, signatureHeader, secret): Promise<boolean>`
 
@@ -85,6 +138,26 @@ Constant-time HMAC-SHA256 verification. Accepts raw hex and `sha256=` prefixed v
 ### `parseVerifiedWebhook(rawBody, signatureHeader, secret): Promise<VerificationSuccessEvent | null>`
 
 Returns the parsed payload if the signature is valid; `null` otherwise.
+
+```ts
+type VerificationSuccessEvent =
+  | {
+      event: "verification.success";
+      channel: "whatsapp";
+      requestId: string;
+      phoneNumber: string;
+      timestamp?: string;
+    }
+  | {
+      event: "verification.success";
+      channel: "telegram";
+      requestId: string;
+      phoneNumber: string;
+      telegramUserId?: string;
+      telegramUsername?: string | null;
+      timestamp?: string;
+    };
+```
 
 ## Errors
 

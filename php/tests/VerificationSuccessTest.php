@@ -6,6 +6,7 @@ namespace LessOTP\Sdk\Tests;
 
 use PHPUnit\Framework\TestCase;
 use LessOTP\Sdk\LessOTPException;
+use LessOTP\Sdk\VerificationChannel;
 use LessOTP\Sdk\VerificationSuccess;
 
 final class VerificationSuccessTest extends TestCase
@@ -14,6 +15,7 @@ final class VerificationSuccessTest extends TestCase
     {
         $payload = array(
             'event' => 'verification.success',
+            'channel' => 'whatsapp',
             'request_id' => 'req_42',
             'phone_number' => '6281234567890',
             'timestamp' => '2026-06-20T10:00:00Z',
@@ -21,9 +23,38 @@ final class VerificationSuccessTest extends TestCase
         $vs = VerificationSuccess::fromArray($payload);
 
         self::assertSame('verification.success', $vs->getEvent());
+        self::assertSame(VerificationChannel::WHATSAPP, $vs->getChannel()->value());
         self::assertSame('req_42', $vs->getRequestId());
         self::assertSame('6281234567890', $vs->getPhoneNumber());
         self::assertSame('2026-06-20T10:00:00Z', $vs->getTimestamp());
+    }
+
+    public function testParsesTelegramPayload(): void
+    {
+        $payload = array(
+            'event' => 'verification.success',
+            'channel' => 'telegram',
+            'request_id' => 'req_tg',
+            'phone_number' => '6281234567890',
+            'telegram_user_id' => '123456789',
+            'telegram_username' => 'fajarbc',
+            'timestamp' => '2026-06-21T10:00:00Z',
+        );
+        $vs = VerificationSuccess::fromArray($payload);
+
+        self::assertSame(VerificationChannel::TELEGRAM, $vs->getChannel()->value());
+        self::assertSame('123456789', $vs->getTelegramUserId());
+        self::assertSame('fajarbc', $vs->getTelegramUsername());
+    }
+
+    public function testDefaultsToWhatsAppWhenChannelMissing(): void
+    {
+        $vs = VerificationSuccess::fromArray(array(
+            'event' => 'verification.success',
+            'request_id' => 'req_legacy',
+            'phone_number' => '6281234567890',
+        ));
+        self::assertSame(VerificationChannel::WHATSAPP, $vs->getChannel()->value());
     }
 
     public function testRejectsUnknownEvent(): void

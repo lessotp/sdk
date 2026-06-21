@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
 use LessOTP\Sdk\AuthRequestResult;
 use LessOTP\Sdk\Client;
 use LessOTP\Sdk\LessOTPException;
+use LessOTP\Sdk\VerificationChannel;
 use LessOTP\Sdk\VerificationMode;
 
 final class ClientTest extends TestCase
@@ -27,15 +28,16 @@ final class ClientTest extends TestCase
         $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($transactions));
 
-        $client = new Client('key_test', 'https://api.lessotp.example', new HttpClient(array('handler' => $stack)));
+        $client = new Client('key_test', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
         $result = $client->authRequest('6281234567890');
 
         self::assertInstanceOf(AuthRequestResult::class, $result);
+        self::assertSame('whatsapp', $result->getChannel()->value());
         self::assertSame('req_abc', $result->getRequestId());
         self::assertSame('A7X92', $result->getUniqueCode());
         self::assertSame(180, $result->getExpiresIn());
         self::assertSame(VerificationMode::STRICT, $result->getMode()->value());
-        self::assertSame('https://wa.me/628999999999?text=%2FLOGIN%20A7X92', $result->getWaLink());
+        self::assertSame('https://wa.me/628999999999?text=%2FSTART%20A7X92', $result->getWaLink());
 
         self::assertCount(1, $transactions);
         /** @var Request $sent */
@@ -43,7 +45,10 @@ final class ClientTest extends TestCase
         self::assertSame('POST', $sent->getMethod());
         self::assertSame('https://api.lessotp.example/api/v1/auth/request', (string) $sent->getUri());
         self::assertSame('Bearer key_test', $sent->getHeaderLine('Authorization'));
-        self::assertSame(array('phone_number' => '6281234567890'), json_decode((string) $sent->getBody(), true, 512, JSON_THROW_ON_ERROR));
+        self::assertSame(
+            array('channel' => 'whatsapp', 'phone_number' => '6281234567890'),
+            json_decode((string) $sent->getBody(), true, 512, JSON_THROW_ON_ERROR)
+        );
     }
 
     public function testDefaultEnvironmentIsProduction(): void
@@ -55,7 +60,7 @@ final class ClientTest extends TestCase
         $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($transactions));
 
-        $client = new Client('key_test', 'https://api.lessotp.example', new HttpClient(array('handler' => $stack)));
+        $client = new Client('key_test', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
         $client->authRequest();
 
         self::assertSame('/api/v1/auth/request', $transactions[0]['request']->getUri()->getPath());
@@ -72,10 +77,10 @@ final class ClientTest extends TestCase
 
         $client = new Client(
             'key_test',
+            'staging',
             'https://api.lessotp.example',
-            new HttpClient(array('handler' => $stack)),
             10,
-            'staging'
+            new HttpClient(array('handler' => $stack))
         );
         $result = $client->authRequest('6281234567890');
 
@@ -94,10 +99,10 @@ final class ClientTest extends TestCase
 
         $client = new Client(
             'key_test',
+            'production',
             'https://api.lessotp.example',
-            new HttpClient(array('handler' => $stack)),
             10,
-            'production'
+            new HttpClient(array('handler' => $stack))
         );
         $client->authRequest('6281234567890', 'staging');
 
@@ -113,18 +118,56 @@ final class ClientTest extends TestCase
         $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($transactions));
 
-        $client = new Client('key_test', 'https://api.lessotp.example', new HttpClient(array('handler' => $stack)));
+        $client = new Client('key_test', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
         $result = $client->authRequest();
 
         self::assertSame(VerificationMode::FRICTIONLESS, $result->getMode()->value());
-        self::assertSame(array(), json_decode((string) $transactions[0]['request']->getBody(), true, 512, JSON_THROW_ON_ERROR));
+        self::assertSame(array('channel' => 'whatsapp'), json_decode((string) $transactions[0]['request']->getBody(), true, 512, JSON_THROW_ON_ERROR));
+    }
+
+    public function testTelegramStrictRequest(): void
+    {
+        $transactions = array();
+        $mock = new MockHandler(array(
+            new Response(200, array(), $this->telegramJson('req_tg', 'TGR12', 'strict')),
+        ));
+        $stack = HandlerStack::create($mock);
+        $stack->push(Middleware::history($transactions));
+
+        $client = new Client('key_test', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
+        $result = $client->requestTelegramAuth('6281234567890');
+
+        self::assertSame('telegram', $result->getChannel()->value());
+        self::assertSame('https://t.me/lessotp_bot?start=TGR12', $result->getTelegramLink());
+        self::assertSame('/start TGR12', $result->getTelegramText());
+        self::assertSame(
+            array('channel' => 'telegram', 'phone_number' => '6281234567890'),
+            json_decode((string) $transactions[0]['request']->getBody(), true, 512, JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function testTelegramFrictionlessRequest(): void
+    {
+        $transactions = array();
+        $mock = new MockHandler(array(
+            new Response(200, array(), $this->telegramJson('req_tg_fric', 'TGR12', 'frictionless')),
+        ));
+        $stack = HandlerStack::create($mock);
+        $stack->push(Middleware::history($transactions));
+
+        $client = new Client('key_test', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
+        $result = $client->requestAuth(VerificationChannel::telegram());
+
+        self::assertSame('telegram', $result->getChannel()->value());
+        self::assertSame(VerificationMode::FRICTIONLESS, $result->getMode()->value());
+        self::assertSame(array('channel' => 'telegram'), json_decode((string) $transactions[0]['request']->getBody(), true, 512, JSON_THROW_ON_ERROR));
     }
 
     public function testThrowsOnNonSuccessHttpStatus(): void
     {
         $mock = new MockHandler(array(new Response(401, array(), json_encode(array('error' => 'invalid_api_key')))));
         $stack = HandlerStack::create($mock);
-        $client = new Client('bad_key', 'https://api.lessotp.example', new HttpClient(array('handler' => $stack)));
+        $client = new Client('bad_key', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
 
         $this->expectException(LessOTPException::class);
         $this->expectExceptionMessageMatches('/401/');
@@ -135,7 +178,7 @@ final class ClientTest extends TestCase
     {
         $mock = new MockHandler(array(new Response(200, array(), json_encode(array('status' => 'success', 'data' => array())))));
         $stack = HandlerStack::create($mock);
-        $client = new Client('k', 'https://api.lessotp.example', new HttpClient(array('handler' => $stack)));
+        $client = new Client('k', 'production', 'https://api.lessotp.example', 10, new HttpClient(array('handler' => $stack)));
 
         $this->expectException(LessOTPException::class);
         $this->expectExceptionMessageMatches('/request_id/');
@@ -145,12 +188,10 @@ final class ClientTest extends TestCase
     public function testRejectsUnknownConstructorEnvironment(): void
     {
         $this->expectException(LessOTPException::class);
-        new Client('k', 'https://api.lessotp.example', null, 10, 'qa');
+        new Client('k', 'qa', 'https://api.lessotp.example', 10, null);
     }
 
-    /**
-     * @return string
-     */
+    /** @return string */
     private function successJson($requestId, $uniqueCode, $mode)
     {
         return json_encode(array(
@@ -158,7 +199,25 @@ final class ClientTest extends TestCase
             'data' => array(
                 'request_id' => $requestId,
                 'unique_code' => $uniqueCode,
-                'wa_link' => 'https://wa.me/628999999999?text=%2FLOGIN%20' . $uniqueCode,
+                'channel' => 'whatsapp',
+                'wa_link' => 'https://wa.me/628999999999?text=%2FSTART%20' . $uniqueCode,
+                'expires_in' => 180,
+                'mode' => $mode,
+            ),
+        ), JSON_THROW_ON_ERROR);
+    }
+
+    /** @return string */
+    private function telegramJson($requestId, $uniqueCode, $mode)
+    {
+        return json_encode(array(
+            'status' => 'success',
+            'data' => array(
+                'request_id' => $requestId,
+                'unique_code' => $uniqueCode,
+                'channel' => 'telegram',
+                'telegram_link' => 'https://t.me/lessotp_bot?start=' . $uniqueCode,
+                'telegram_text' => '/start ' . $uniqueCode,
                 'expires_in' => 180,
                 'mode' => $mode,
             ),

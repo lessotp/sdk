@@ -1,0 +1,19 @@
+# Dependencies
+vendor/
+
+# PHPUnit / coverage
+.phpunit.cache/
+.phpunit.result.cache
+coverage/
+
+# Composer artifacts
+composer.phar
+
+# Logs
+*.log
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

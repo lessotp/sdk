@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lessotp-sdk"
-version = "0.1.0"
-description = "LessOTP Inbound WhatsApp Authentication client SDK for Python."
+version = "0.2.0"
+description = "LessOTP Inbound Phone Authentication client SDK for Python. WhatsApp and Telegram channels."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
 authors = [{ name = "LessOTP" }]
-keywords = ["lessotp", "whatsapp", "authentication", "verification", "passwordless"]
+keywords = ["lessotp", "whatsapp", "telegram", "authentication", "verification", "passwordless"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

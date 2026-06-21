@@ -1,7 +1,7 @@
 {
   "name": "@lessotp/sdk",
-  "version": "0.1.0",
-  "description": "LessOTP Inbound WhatsApp Authentication client SDK for JavaScript, Bun, and Node.",
+  "version": "0.2.0",
+  "description": "LessOTP Inbound Phone Authentication client SDK for JavaScript, Bun, and Node. WhatsApp and Telegram channels.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,7 @@
   "bugs": {
     "url": "https://github.com/lessotp/sdk/issues"
   },
-  "keywords": ["lessotp", "whatsapp", "authentication", "verification", "passwordless"],
+  "keywords": ["lessotp", "whatsapp", "telegram", "authentication", "verification", "passwordless"],
   "engines": {
     "node": ">=18"
   },

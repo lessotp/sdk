@@ -1,6 +1,6 @@
 # LessOTP SDKs
 
-Official client libraries for the LessOTP Inbound WhatsApp Authentication API.
+Official client libraries for the **LessOTP Inbound Phone Authentication API** (WhatsApp by default, Telegram supported).
 
 ## Install
 

@@ -1,11 +1,16 @@
 /**
- * LessOTP Inbound WhatsApp Authentication API — client SDK.
+ * LessOTP Inbound Phone Authentication API — client SDK.
+ *
+ * Supports WhatsApp (default) and Telegram channels for inbound
+ * phone authentication with signed webhook delivery.
  */
 
 export type LessOTPEnvironment = "production" | "staging";
 export type VerificationMode = "strict" | "frictionless";
+export type VerificationChannel = "whatsapp" | "telegram";
 
-export interface AuthRequestResult {
+export interface AuthRequestWhatsAppResult {
+  channel: "whatsapp";
   requestId: string;
   uniqueCode: string;
   waLink: string;
@@ -13,23 +18,63 @@ export interface AuthRequestResult {
   mode: VerificationMode;
 }
 
-export interface VerificationSuccessEvent {
+export interface AuthRequestTelegramResult {
+  channel: "telegram";
+  requestId: string;
+  uniqueCode: string;
+  telegramLink: string;
+  telegramText: string;
+  expiresIn: number;
+  mode: VerificationMode;
+}
+
+export type AuthRequestResult = AuthRequestWhatsAppResult | AuthRequestTelegramResult;
+
+export type VerificationChannelEvent = VerificationChannel;
+
+export interface VerificationSuccessBase {
   event: "verification.success";
+  channel: VerificationChannel;
   requestId: string;
   phoneNumber: string;
   timestamp?: string;
 }
 
+export interface VerificationSuccessWhatsApp extends VerificationSuccessBase {
+  channel: "whatsapp";
+}
+
+export interface VerificationSuccessTelegram extends VerificationSuccessBase {
+  channel: "telegram";
+  telegramUserId?: string;
+  telegramUsername?: string | null;
+}
+
+export type VerificationSuccessEvent = VerificationSuccessWhatsApp | VerificationSuccessTelegram;
+
 export interface ClientOptions {
   apiKey: string;
   environment?: LessOTPEnvironment;
   baseUrl?: string;
-  fetch?: typeof fetch;
   timeoutMs?: number;
+  fetch?: typeof fetch;
 }
 
 export interface AuthRequestOptions {
   environment?: LessOTPEnvironment;
+  /** Optional channel override; default is "whatsapp". */
+  channel?: VerificationChannel;
+}
+
+/** Options for the new multi-channel request method. */
+export interface AuthRequestAdvancedOptions extends AuthRequestOptions {
+  /**
+   * Phone number for strict verification.
+   * For Telegram frictionless mode this can be omitted: when channel is
+   * "telegram" and `phoneNumber` is omitted, the bot will resolve the phone
+   * from the user's contact share button.
+   */
+  phoneNumber?: string | null;
 }
 
 export class LessOTPError extends Error {
@@ -62,6 +107,18 @@ function resolveEnvironment(value: unknown): LessOTPEnvironment {
   );
 }
 
+function resolveChannel(value: unknown): VerificationChannel {
+  if (value === undefined || value === null) {
+    return "whatsapp";
+  }
+  if (value === "whatsapp" || value === "telegram") {
+    return value;
+  }
+  throw new LessOTPError(
+    `LessOTP channel must be 'whatsapp' or 'telegram', got '${String(value)}'`,
+  );
+}
+
 function endpointFor(environment: LessOTPEnvironment): string {
   return ENVIRONMENTS[environment];
 }
@@ -81,39 +138,71 @@ export class LessOTPClient {
     this.apiKey = options.apiKey;
     this.environment = resolveEnvironment(options.environment);
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
-    this.fetchImpl = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.fetchImpl = options.fetch ?? fetch;
   }
 
   /**
-   * Create a verification request.
+   * Create a verification request (legacy convenience method).
    *
-   * The endpoint is selected from the client environment. Use
-   * `{ environment: "staging" }` on the constructor or this method for staging.
+   * Use {@link requestAuth} for multi-channel support.
+   *
+   * When called with only `phoneNumber`, this is equivalent to a WhatsApp
+   * `requestAuth({ channel: "whatsapp", phoneNumber })`. When called with no
+   * `phoneNumber`, this is WhatsApp frictionless.
    */
   async authRequest(
     phoneNumber?: string,
     options?: AuthRequestOptions,
   ): Promise<AuthRequestResult> {
     const environment = resolveEnvironment(options?.environment ?? this.environment);
+    const channel = resolveChannel(options?.channel);
+    return this.requestAuth({
+      channel,
+      phoneNumber: phoneNumber ?? null,
+      environment,
+    });
+  }
+
+  /**
+   * Create a multi-channel verification request.
+   *
+   * Channel defaults to `whatsapp` (backward compatible). For Telegram:
+   *
+   * - Strict: pass `channel: "telegram"` and `phoneNumber`.
+   * - Frictionless: pass `channel: "telegram"` and omit `phoneNumber`.
+   *
+   * The Telegram bot will always ask the user to share their phone number
+   * via the official Telegram contact sharing button. Telegram never accepts
+   * manually typed phone numbers.
+   */
+  async requestAuth(
+    options: AuthRequestAdvancedOptions,
+  ): Promise<AuthRequestResult> {
+    const environment = resolveEnvironment(options.environment ?? this.environment);
+    const channel = resolveChannel(options.channel);
     const url = `${this.baseUrl}${endpointFor(environment)}`;
+
+    const body: Record<string, string> = { channel };
+    if (options.phoneNumber) {
+      body.phone_number = options.phoneNumber;
+    }
+
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.apiKey}`,
         "content-type": "application/json",
         accept: "application/json",
-        "user-agent": "lessotp-sdk-js/0.1.0",
+        "user-agent": "lessotp-sdk-js/0.2.0",
       },
-      body: JSON.stringify(
-        phoneNumber === undefined ? {} : { phone_number: phoneNumber },
-      ),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
       throw new LessOTPError(
-        `LessOTP authRequest failed: ${response.status} ${response.statusText}`,
+        `LessOTP requestAuth failed: ${response.status} ${response.statusText}`,
       );
     }
 
@@ -173,7 +262,7 @@ function parseAuthRequest(json: unknown): AuthRequestResult {
     throw new LessOTPError("LessOTP response missing 'status: success' or 'data' object");
   }
   const d = json.data;
-  const required = ["request_id", "unique_code", "wa_link", "expires_in", "mode"];
+  const required = ["request_id", "unique_code", "expires_in", "mode", "channel"];
   for (const k of required) {
     if (!(k in d)) {
       throw new LessOTPError(`LessOTP response missing '${k}' in data`);
@@ -183,13 +272,38 @@ function parseAuthRequest(json: unknown): AuthRequestResult {
   if (mode !== "strict" && mode !== "frictionless") {
     throw new LessOTPError(`LessOTP response mode must be 'strict' or 'frictionless', got '${String(mode)}'`);
   }
-  return {
-    requestId: String(d.request_id),
-    uniqueCode: String(d.unique_code),
-    waLink: String(d.wa_link),
-    expiresIn: Number(d.expires_in),
-    mode,
-  };
+  const channel = d.channel;
+  if (channel === "telegram") {
+    const link = d.telegram_link;
+    const text = d.telegram_text;
+    if (typeof link !== "string" || typeof text !== "string") {
+      throw new LessOTPError("LessOTP Telegram response missing 'telegram_link' or 'telegram_text'");
+    }
+    return {
+      channel: "telegram",
+      requestId: String(d.request_id),
+      uniqueCode: String(d.unique_code),
+      telegramLink: link,
+      telegramText: text,
+      expiresIn: Number(d.expires_in),
+      mode,
+    };
+  }
+  if (channel === "whatsapp") {
+    const link = d.wa_link;
+    if (typeof link !== "string") {
+      throw new LessOTPError("LessOTP WhatsApp response missing 'wa_link'");
+    }
+    return {
+      channel: "whatsapp",
+      requestId: String(d.request_id),
+      uniqueCode: String(d.unique_code),
+      waLink: link,
+      expiresIn: Number(d.expires_in),
+      mode,
+    };
+  }
+  throw new LessOTPError(`LessOTP response channel must be 'whatsapp' or 'telegram', got '${String(channel)}'`);
 }
 
 function parseVerificationSuccess(json: unknown): VerificationSuccessEvent {
@@ -199,17 +313,39 @@ function parseVerificationSuccess(json: unknown): VerificationSuccessEvent {
   if (json.event !== "verification.success") {
     throw new LessOTPError(`unexpected webhook event '${String(json.event)}'`);
   }
-  if (
-    typeof json.request_id !== "string" ||
-    typeof json.phone_number !== "string"
-  ) {
+  if (typeof json.request_id !== "string" || typeof json.phone_number !== "string") {
     throw new LessOTPError("webhook payload missing request_id or phone_number");
   }
+  const timestamp = typeof json.timestamp === "string" ? json.timestamp : undefined;
+  const channel = json.channel;
+  if (channel === "telegram") {
+    return {
+      event: "verification.success",
+      channel: "telegram",
+      requestId: json.request_id,
+      phoneNumber: json.phone_number,
+      telegramUserId: typeof json.telegram_user_id === "string" ? json.telegram_user_id : undefined,
+      telegramUsername:
+        typeof json.telegram_username === "string" ? json.telegram_username : null,
+      ...(timestamp ? { timestamp } : {}),
+    };
+  }
+  if (channel === "whatsapp") {
+    return {
+      event: "verification.success",
+      channel: "whatsapp",
+      requestId: json.request_id,
+      phoneNumber: json.phone_number,
+      ...(timestamp ? { timestamp } : {}),
+    };
+  }
+  // Backward compatibility: pre-channel payloads default to WhatsApp.
   return {
     event: "verification.success",
+    channel: "whatsapp",
     requestId: json.request_id,
     phoneNumber: json.phone_number,
-    ...(typeof json.timestamp === "string" ? { timestamp: json.timestamp } : {}),
+    ...(timestamp ? { timestamp } : {}),
   };
 }
 
@@ -230,8 +366,8 @@ function isObject(x: unknown): x is Record<string, unknown> {
 
 function hexToBytes(hex: string): Uint8Array {
   const buf = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < buf.length; i++) {
-    buf[i] = parseInt(hex.substr(i * 2, 2), 16);
+  for (let i = 0; i < buf.length; i += 2) {
+    buf[i / 2] = parseInt(hex.substr(i, 2), 16);
   }
   return buf;
 }
